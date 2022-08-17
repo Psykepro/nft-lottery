@@ -1,7 +1,13 @@
-const { DeployAllContracts } = require("../utils/deploy.js");
+const { DeployLotteryContracts, DeployChainlinkContracts } = require("../utils/deploy.js");
+
+require("dotenv").config();
+
 
 async function main() {
-  await DeployAllContracts();
+
+  const chainId = process.env.CHAIN_ID;
+  await DeployChainlinkContracts(chainId)
+  await DeployLotteryContracts();
 }
 
 main()

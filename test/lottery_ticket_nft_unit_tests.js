@@ -1,16 +1,18 @@
 require("@nomiclabs/hardhat-waffle");
-const { ethers, upgrades } = require("hardhat")
+const { ethers } = require("hardhat")
 const { expect } = require("chai");
 const { lotteryCfg } = require("../config/lottery.config");
-const { DeployAllContracts } = require("../utils/deploy.js");
+const { DeployLotteryContracts, DeployChainlinkContracts } = require("../utils/deploy.js");
 const { expectRevert, constants} = require('@openzeppelin/test-helpers');
 const { awaitReceipt } = require("../utils/transactions");
-
+const { autoFundCheck } = require("../utils/chainlink");
+const { linkConfig } = require("../config/link.config");
+require("dotenv").config();
 
 async function deployBeaconProxy(factory, proxyParams) {
-  let tx = await factory.createLottery(...proxyParams);
+  let tx = await factory.createLotteryProxy(...proxyParams);
   await awaitReceipt(tx);
-  let proxyAddress = await factory.getLatestProxy();
+  let proxyAddress = await factory.getLatestLotteryProxy();
   return await ethers.getContractAt(
     "LotteryTicketNft",
     proxyAddress
@@ -27,20 +29,28 @@ describe("LotteryTicketNft Unit Tests", () => {
   let provider;
   let proxyParams;
   let factory;
+  let linkCfg;
+  let chainId;
   before(async () => {
+    chainId = process.env.CHAIN_ID;
     [deployer, user2, user3] = await ethers.getSigners();
     provider = ethers.getDefaultProvider();
-    const contractAddresses = await DeployAllContracts(false);
-    blueprint = await ethers.getContractFactory("LotteryTicketNft");
-    beacon = await ethers.getContractAt(
-      "LotteryTicketNftBeacon",
-      contractAddresses.beacon
-    );
-    factory = await ethers.getContractAt(
-      "LotteryTicketNftFactory",
-      contractAddresses.factory
-    );
-    proxyParams = [lotteryCfg.baseURI, lotteryCfg.ticketPrice, lotteryCfg.lotteryDurationInMinutes];
+    let chainlinkDeployConfig = await DeployChainlinkContracts(chainId, false);   
+
+    linkCfg = {
+      networkName: linkConfig[chainId].name,
+      vrfCoordinator: chainlinkDeployConfig.VRFCoordinatorMock.address,
+      linkToken: chainlinkDeployConfig.linkToken.address,
+      keyHash: chainlinkDeployConfig.keyHash,
+      fee: chainlinkDeployConfig.fee
+    }
+
+    const lotteryContracts = await DeployLotteryContracts(false);
+    blueprint = lotteryContracts.blueprint;
+    beacon = lotteryContracts.beacon;
+    factory = lotteryContracts.factory
+
+    proxyParams = [lotteryCfg.baseURI, lotteryCfg.ticketPrice, lotteryCfg.lotteryDurationInMinutes, linkCfg.vrfCoordinator, linkCfg.linkToken, linkCfg.keyHash, linkCfg.fee];
     proxy = await deployBeaconProxy(factory, proxyParams);
   });
 
@@ -58,16 +68,31 @@ describe("LotteryTicketNft Unit Tests", () => {
       expect(await proxy.prizePool()).to.be.equal(lotteryCfg.ticketPrice);
     });
   
-    it("Should draw surprise winner if there is a mint transaction after the half of the lottery lifetime.", async () => {
-      await ethers.provider.send("evm_mine", [(await proxy.surpriseWinnerStartDrawTimestamp()).toNumber()]);
-  
+    it("Should request randomness for surprise winner draw if there is a mint transaction after the half of the lottery lifetime and the entries are more than 1.", async () => {
+      await ethers.provider.send("evm_mine", [(await proxy.surpriseWinnerStartDrawTimestamp()).add(1).toNumber()]);
+      if (
+        await autoFundCheck(
+          proxy.address,
+          chainId,
+          linkCfg.networkName,
+          linkCfg.linkToken,
+          false
+        )
+      ) {
+        await hre.run("fund-link", {
+          contract: proxy.address,
+          linkaddress: linkCfg.linkToken,
+        });
+      }
+
       await expect(proxy.connect(user2)
         .safeMint(user2.address, {value: lotteryCfg.ticketPrice}))
         .to.emit(proxy, "Mint").withArgs(user2.address)
+        .to.emit(proxy, "RandomnessRequested")
         .not.to.be.reverted; 
-  
+      
       let surpriseWinnerInfo = await proxy.surpriseWinner();
-      expect(surpriseWinnerInfo.addr).not.to.be.equal(constants.ZERO_ADDRESS);
+      expect(surpriseWinnerInfo.randomnessRequestId).not.to.be.equal(constants.ZERO_BYTES32);
     });
   
     it("Should NOT participate if the sended funds are lower than the required.", async () => {
@@ -87,6 +112,20 @@ describe("LotteryTicketNft Unit Tests", () => {
 
   describe("Draw Winners", () => {
     before(async () => {
+      if (
+        await autoFundCheck(
+          proxy.address,
+          chainId,
+          linkCfg.networkName,
+          linkCfg.linkToken,
+          false
+        )
+      ) {
+        await hre.run("fund-link", {
+          contract: proxy.address,
+          linkaddress: linkCfg.linkToken,
+        });
+      }
       proxy = await deployBeaconProxy(factory, proxyParams);
     });
 
@@ -150,6 +189,20 @@ describe("LotteryTicketNft Unit Tests", () => {
 
   describe("Pay Winners", () => {
     before(async () => {
+      if (
+        await autoFundCheck(
+          proxy.address,
+          chainId,
+          linkCfg.networkName,
+          linkCfg.linkToken,
+          false
+        )
+      ) {
+        await hre.run("fund-link", {
+          contract: proxy.address,
+          linkaddress: linkCfg.linkToken,
+        });
+      }
       proxy = await deployBeaconProxy(factory, proxyParams);
     });
 

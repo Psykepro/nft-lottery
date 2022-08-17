@@ -1,7 +1,5 @@
 const { ethers, } = require("hardhat");
 const { lotteryCfg } = require("../config/lottery.config")
-const { awaitReceipt } = require("../utils/transactions")
-const { autoFundCheck } = require("../utils/chainlink")
 const { HardhatChainId } = require("../constants/hardhat");
 const { linkConfig } = require("../config/link.config");
 
@@ -21,24 +19,6 @@ async function main() {
   const params = [lotteryCfg.baseURI, lotteryCfg.ticketPrice, lotteryCfg.lotteryDurationInMinutes, linkCfg.vrfCoordinator, linkCfg.linkToken, linkCfg.keyHash, linkCfg.fee];
   const predictedAddress = await lotteryTicketNftFactory.predictAddressForLottery(...params);
   console.log("PredictedAddress: ", predictedAddress);
-  lotteryTicketNftFactory.on("CreatedLotteryProxy", (addr, salt) => {
-    console.log("[event:CreatedLotteryProxy]: addr: %s, salt: %s", addr, salt);
-  });
-  const tx = await lotteryTicketNftFactory.createLotteryProxy(...params);
-  await awaitReceipt(tx, `LotteryTicketNft (Proxy) deployed at: ${predictedAddress}`, "Failed to deploy LotteryTicketNft (Proxy).")
-  if (
-    await autoFundCheck(
-      predictedAddress,
-      chainId,
-      linkCfg.networkName,
-      linkCfg.linkToken
-    )
-  ) {
-    await hre.run("fund-link", {
-      contract: predictedAddress,
-      linkaddress: linkCfg.linkToken,
-    });
-  }
 }
 
 main()

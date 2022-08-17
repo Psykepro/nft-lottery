@@ -24,18 +24,34 @@ contract LotteryTicketNftFactory {
     // Public //
     ////////////
 
-    function createLottery(string memory _baseUri, uint256 _ticketPrice, uint256 _lotteryDurationInMinutes) public returns (address deployed) {
-        bytes32 salt = getSalt(_baseUri, _ticketPrice, _lotteryDurationInMinutes);
-        bytes memory bytecode = getBytecode(_baseUri, _ticketPrice, _lotteryDurationInMinutes);
+    function createLotteryProxy(
+        string memory _baseUri, 
+        uint256 _ticketPrice, 
+        uint256 _lotteryDurationInMinutes, 
+        address _vrfCoordinator, 
+        address _link, 
+        bytes32 _keyHash, 
+        uint256 _fee
+    ) public returns (address deployed) {
+        bytes32 salt = getSalt(_baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee);
+        bytes memory bytecode = getBytecode(_baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee);
         deployed = Create2.deploy(0, salt, bytecode);
         proxyId += 1;
         lotteryTicketNftBeaconProxies.push(deployed);
         emit CreatedLotteryProxy(deployed, salt);
     }
 
-    function predictAddressForLottery(string memory _baseUri, uint256 _ticketPrice, uint256 _lotteryDurationInMinutes) public view returns (address predicted) {
-        bytes32 salt = getSalt(_baseUri, _ticketPrice, _lotteryDurationInMinutes);
-        bytes memory bytecode = getBytecode(_baseUri, _ticketPrice, _lotteryDurationInMinutes);
+    function predictAddressForLottery(
+        string memory _baseUri, 
+        uint256 _ticketPrice, 
+        uint256 _lotteryDurationInMinutes, 
+        address _vrfCoordinator, 
+        address _link, 
+        bytes32 _keyHash, 
+        uint256 _fee
+    ) public view returns (address predicted) {
+        bytes32 salt = getSalt(_baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee);
+        bytes memory bytecode = getBytecode(_baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee);
         predicted = computeAddress(salt, keccak256(bytecode));
     }
 
@@ -43,7 +59,7 @@ contract LotteryTicketNftFactory {
         return beacon.implementation();
     }
 
-    function getLatestProxy() public view returns (address) {
+    function getLatestLotteryProxy() public view returns (address) {
         return lotteryTicketNftBeaconProxies[lotteryTicketNftBeaconProxies.length - 1];
     }
 
@@ -55,16 +71,40 @@ contract LotteryTicketNftFactory {
         return Create2.computeAddress(salt, codeHash);
     }
 
-    function _getData(string memory _baseUri, uint256 _ticketPrice, uint256 _lotteryDurationInMinutes) internal pure returns (bytes memory) {
-        return abi.encodeWithSignature("initialize(string,uint256,uint256)", _baseUri, _ticketPrice, _lotteryDurationInMinutes);
+    function _getData(
+        string memory _baseUri, 
+        uint256 _ticketPrice, 
+        uint256 _lotteryDurationInMinutes, 
+        address _vrfCoordinator, 
+        address _link, 
+        bytes32 _keyHash, 
+        uint256 _fee
+    ) internal pure returns (bytes memory) {
+        return abi.encodeWithSignature("initialize(string,uint256,uint256,address,address,bytes32,uint256)", _baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee);
     }
 
-    function getBytecode(string memory _baseUri, uint256 _ticketPrice, uint256 _lotteryDurationInMinutes) internal view returns (bytes memory) {
-        bytes memory data = _getData(_baseUri, _ticketPrice, _lotteryDurationInMinutes);
+    function getBytecode(
+        string memory _baseUri, 
+        uint256 _ticketPrice, 
+        uint256 _lotteryDurationInMinutes, 
+        address _vrfCoordinator, 
+        address _link, 
+        bytes32 _keyHash, 
+        uint256 _fee
+    ) internal view returns (bytes memory) {
+        bytes memory data = _getData(_baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee);
         return abi.encodePacked(type(BeaconProxy).creationCode, abi.encode(beacon, data));
     }
 
-    function getSalt(string memory _baseUri, uint256 _ticketPrice, uint256 _lotteryDurationInMinutes) internal view returns (bytes32) {
-        return keccak256(abi.encodePacked(_baseUri, _ticketPrice, _lotteryDurationInMinutes, proxyId));
+    function getSalt(
+        string memory _baseUri, 
+        uint256 _ticketPrice, 
+        uint256 _lotteryDurationInMinutes, 
+        address _vrfCoordinator, 
+        address _link, 
+        bytes32 _keyHash, 
+        uint256 _fee
+    ) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked(_baseUri, _ticketPrice, _lotteryDurationInMinutes, _vrfCoordinator, _link, _keyHash, _fee, proxyId));
     }
 }

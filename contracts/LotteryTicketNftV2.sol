@@ -7,14 +7,16 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/CountersUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "./external/VRFConsumerBaseUpgradeable.sol";
 
-contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorageUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
+contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorageUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable, VRFConsumerBaseUpgradeable {
 
   using CountersUpgradeable for CountersUpgradeable.Counter;
   using SafeMath for uint256;
 
   struct WinnerInfo {
     bool isPaid;
+    bytes32 randomnessRequestId;
     address addr;
   }
 
@@ -28,16 +30,24 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
   uint256 public prizePool;
   CountersUpgradeable.Counter private _tokenIdCounter;
   string public baseURISuffix = "/metadata.json"; 
+  bytes32 private keyHash;
+  uint256 private fee;
+  mapping(bytes32 => WinnerInfo) public winnerRandomnessRequests;
 
   // Events //
   event Mint(address owner);
   event WinnerDeclared(address winner);
   event WinnerPaid(address winner, uint256 amount);
+  event RandomnessRequested(bytes32 requestId);
 
   function initialize(
     string memory _baseUri,
     uint256 _ticketPrice,
-    uint256 _lotteryDurationInMinutes
+    uint256 _lotteryDurationInMinutes,
+    address _vrfCoordinator,
+    address _link,
+    bytes32 _keyHash,
+    uint256 _fee
   ) initializer public {
       require(_ticketPrice > 0, "Value for 'ticketPrice' must be greater than 0");
       require(bytes(_baseUri).length > 0, "Value for 'baseURI' is empty.");
@@ -47,10 +57,13 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
       lotteryEndTimestamp = block.timestamp + _lotteryDurationInMinutes * 1 minutes;
       // The time after which if there is a mint transaction it will draw the surprise winner.
       surpriseWinnerStartDrawTimestamp = block.timestamp + (_lotteryDurationInMinutes / 2) * 1 minutes;
+      keyHash = _keyHash;
+      fee = _fee;
       __ERC721_init("LotteryTicket", "LTICKET");
       __ERC721URIStorage_init();
       __Ownable_init();
       __ReentrancyGuard_init();
+      __VRFConsumerBase_init(_vrfCoordinator, _link);
       transferOwnership(tx.origin);
   }
 
@@ -62,11 +75,8 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
       uint256 tokenId = _tokenIdCounter.current();
       entries.push(_msgSender());
       if (surpriseWinner.addr == address(0) && block.timestamp >= surpriseWinnerStartDrawTimestamp) {
-        if(entries.length == 1) {
-          surpriseWinner.addr = entries[0];
-        } else {
-          uint256 winner = _drawRandomWinner();
-          surpriseWinner.addr = entries[winner];
+        if(entries.length > 1) {
+          _requestRandomWinner(surpriseWinner);
         }
       }
       _tokenIdCounter.increment();
@@ -106,20 +116,11 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
     }
 
     if (surpriseWinner.addr == address(0)) {
-      uint256 winner = _drawRandomWinner();
-      surpriseWinner.addr = entries[winner];
-      emit WinnerDeclared(surpriseWinner.addr);
+      _requestRandomWinner(surpriseWinner);
     }
 
     if (finalWinner.addr == address(0)) {
-      uint256 winner = _drawRandomWinner();
-      if (entries[winner] == surpriseWinner.addr) {
-          while (entries[winner] == surpriseWinner.addr) {
-            winner = _drawRandomWinner();
-          }
-      }
-      finalWinner.addr = entries[winner];
-      emit WinnerDeclared(finalWinner.addr);
+      _requestRandomWinner(finalWinner);
     }
   }
 
@@ -139,7 +140,7 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
       emit WinnerPaid(finalWinner.addr, totalAmount);
       return;
     }
-    
+
     uint256 surpriseWinnerAmount = totalAmount / 2;
     uint256 finalWinnerAmount = totalAmount - surpriseWinnerAmount;
     if (!surpriseWinner.isPaid) {
@@ -165,9 +166,20 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
   // Internal //
   //////////////
 
-  function _drawRandomWinner() internal view returns(uint256) {
-      uint256 randomNumber = random();
-      return randomNumber.mod(entries.length);
+  function fulfillRandomness(bytes32 requestId, uint256 randomness) internal override {
+    WinnerInfo storage winnerInfo = winnerRandomnessRequests[requestId];
+    uint256 winner = randomness.mod(entries.length);
+    winnerInfo.addr = entries[winner];
+    delete winnerRandomnessRequests[requestId];
+    emit WinnerDeclared(winnerInfo.addr);
+  }
+
+  function _requestRandomWinner(WinnerInfo storage winnerInfo) internal {
+      require(LINK.balanceOf(address(this)) >= fee, "Not enough LINK");
+      bytes32 requestId = requestRandomness(keyHash, fee);
+      winnerRandomnessRequests[requestId] = winnerInfo;
+      winnerInfo.randomnessRequestId = requestId;
+      emit RandomnessRequested(requestId);
   }
 
   function _beforeTokenTransfer(address from, address to, uint256 tokenId) internal override(ERC721Upgradeable) {
@@ -188,16 +200,6 @@ contract LotteryTicketNftV2 is Initializable, ERC721Upgradeable, ERC721URIStorag
 
   function _baseURI() internal view override  returns (string memory) {
       return baseURI;
-  }
-
-  /////////////
-  // Private //
-  /////////////
-
-  function random() private view returns(uint) {
-    // This function is actually 'hackable' because it can be manipulated by the miners. 
-    // But since ChainLink's 'VRFConsumerBase' is not Upgradeable it can't be used for this smart contract.
-    return uint(keccak256(abi.encodePacked(block.difficulty, block.timestamp, _tokenIdCounter.current())));
   }
 
   ///////////////
