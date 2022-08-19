@@ -40,6 +40,11 @@ contract LotteryTicketNft is Initializable, ERC721Upgradeable, ERC721URIStorageU
   event WinnerPaid(address winner, uint256 amount);
   event RandomnessRequested(bytes32 requestId);
 
+  /// @custom:oz-upgrades-unsafe-allow constructor
+  constructor() {
+      _disableInitializers();
+  }
+
   function initialize(
     string memory _baseUri,
     uint256 _ticketPrice,
